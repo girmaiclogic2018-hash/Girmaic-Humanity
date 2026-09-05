@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function hasRole(role) {
+      return isAuthenticated() && 
+        resource.data.role == role || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role);
+    }
+    
+    function isStaff() {
+      if (!isAuthenticated()) return false;
+      let role = get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return role == 'ADMIN' || role == 'SUPER_ADMIN' || role == 'MODERATOR' || role == 'REVIEWER' || role == 'HUMAN_RIGHTS_ANALYST' || role == 'ORGANIZATION_REVIEWER';
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId) || (isAuthenticated() && getUserData().role == 'ADMIN');
+      allow delete: if isAuthenticated() && getUserData().role == 'ADMIN';
+    }
+
+    // Reports Collection
+    match /reports/{reportId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isStaff());
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isStaff());
+      allow delete: if isAuthenticated() && isStaff();
+    }
+
+    // Rights Articles Collection (Know Your Rights)
+    match /rightsArticles/{articleId} {
+      allow read: if true;
+      allow write: if isAuthenticated() && (getUserData().role == 'ADMIN' || getUserData().role == 'SUPER_ADMIN');
+    }
+
+    // Organizations Collection
+    match /organizations/{orgId} {
+      allow read: if true;
+      allow write: if isAuthenticated() && (getUserData().role == 'ADMIN' || getUserData().role == 'SUPER_ADMIN' || getUserData().role == 'ORGANIZATION_REVIEWER');
+    }
+
+    // Community Posts Collection
+    match /communityPosts/{postId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isStaff());
+    }
+
+    // Moderation Cases Collection
+    match /moderationCases/{caseId} {
+      allow read, write: if isAuthenticated() && isStaff();
+    }
+
+    // Audit Logs Collection
+    match /auditLogs/{logId} {
+      allow read: if isAuthenticated() && (getUserData().role == 'ADMIN' || getUserData().role == 'SUPER_ADMIN');
+      allow write: if isAuthenticated(); // Allowed to write log entries from verified actions
+    }
+
+    // System Settings Collection
+    match /systemSettings/{settingId} {
+      allow read: if true;
+      allow write: if isAuthenticated() && (getUserData().role == 'ADMIN' || getUserData().role == 'SUPER_ADMIN');
+    }
+  }
+}
