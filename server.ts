@@ -11,11 +11,18 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Robust filename and dirname derivation for ESM and bundled CJS
+let __filename = '';
+let __dirname = '';
+try {
+  __filename = fileURLToPath(import.meta.url);
+} catch {
+  __filename = process.argv[1] ? path.resolve(process.argv[1]) : path.join(process.cwd(), 'dist', 'server.cjs');
+}
+__dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
@@ -219,7 +226,7 @@ const startServer = async () => {
     console.log('Serving production build assets.');
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`GIRMAIC HUMANITY server actively listening on http://0.0.0.0:${PORT}`);
   });
 };

@@ -4,7 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { User, Mail, ShieldAlert, Download, Trash2, Eye, Bell, ShieldCheck, Heart, ExternalLink, Fingerprint, Lock } from 'lucide-react';
+import { User, Mail, ShieldAlert, Download, Trash2, Eye, Bell, ShieldCheck, Heart, ExternalLink, Fingerprint, Lock, FileText } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 import { localDb } from '../lib/localDb';
 import { UserProfile, Report, UserRole } from '../types';
 
@@ -26,6 +27,9 @@ export default function ProfileManager({ userId, onUpdateProfile, onLogout }: Pr
   const [hasBiometricSupport, setHasBiometricSupport] = useState(false);
   const [biometricStatus, setBiometricStatus] = useState('');
 
+  // App Security section lock states
+  const [appSecurityEnabled, setAppSecurityEnabled] = useState(false);
+
   useEffect(() => {
     // Check device support for local platform biometric authenticator
     if (window.PublicKeyCredential) {
@@ -40,7 +44,25 @@ export default function ProfileManager({ userId, onUpdateProfile, onLogout }: Pr
     
     const saved = localStorage.getItem('girmaic_biometric_enabled') === 'true';
     setBiometricEnabled(saved);
+
+    const secSaved = localStorage.getItem('girmaic_app_security_enabled') === 'true';
+    setAppSecurityEnabled(secSaved);
   }, []);
+
+  const handleToggleAppSecurity = () => {
+    const nextVal = !appSecurityEnabled;
+    setAppSecurityEnabled(nextVal);
+    localStorage.setItem('girmaic_app_security_enabled', String(nextVal));
+    if (nextVal) {
+      const code = window.prompt("Set a 4-digit security passcode to lock sensitive 'Report' and 'Admin' sections:", "1234");
+      if (code) {
+        localStorage.setItem('girmaic_app_passcode', code);
+      }
+    } else {
+      localStorage.removeItem('girmaic_app_passcode');
+      sessionStorage.removeItem('girmaic_session_unlocked');
+    }
+  };
 
   const handleToggleBiometrics = async () => {
     if (!profile) return;
@@ -167,6 +189,96 @@ export default function ProfileManager({ userId, onUpdateProfile, onLogout }: Pr
     downloadAnchor.remove();
   };
 
+  const handleExportPDFReports = () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      // Header branding background bar
+      doc.setFillColor(15, 23, 42); // slate-900
+      doc.rect(0, 0, 210, 32, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text('GIRMAIC HUMANITY', 15, 12);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text('GLOBAL HUMAN RIGHTS, JUSTICE & HUMAN DIGNITY PLATFORM', 15, 18);
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('USER SECURE INCIDENTS & REPORTS BACKUP DOSSIER', 15, 25);
+      doc.text(`EXPORT DATE: ${new Date().toLocaleString()}`, 135, 25);
+
+      let currentY = 45;
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.text(`SUBMITTER: ${profile?.displayName} (${profile?.email})`, 15, currentY);
+      currentY += 8;
+      doc.text(`TOTAL SAVED REPORTS: ${reports.length}`, 15, currentY);
+      currentY += 10;
+
+      if (reports.length === 0) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.text('No active reports recorded in secure local storage.', 15, currentY);
+      } else {
+        reports.forEach((rep, index) => {
+          if (currentY > 250) {
+            doc.addPage();
+            currentY = 20;
+          }
+
+          doc.setDrawColor(226, 232, 240);
+          doc.line(15, currentY, 195, currentY);
+          currentY += 6;
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(11);
+          doc.text(`Report [${index + 1}]: ${rep.id} (${rep.status})`, 15, currentY);
+          currentY += 6;
+
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          doc.text(`Categories: ${rep.categories.join(', ')}`, 15, currentY);
+          currentY += 5;
+          doc.text(`Incident Date: ${rep.dateOfIncident} | Location: ${rep.locationOfIncident.country}, ${rep.locationOfIncident.region}`, 15, currentY);
+          currentY += 5;
+          doc.text(`Privacy Level: ${rep.privacyLevel}`, 15, currentY);
+          currentY += 6;
+
+          const splitDesc = doc.splitTextToSize(`Description: ${rep.description}`, 180);
+          doc.text(splitDesc, 15, currentY);
+          currentY += (splitDesc.length * 5) + 8;
+        });
+      }
+
+      // Footer seal
+      if (currentY > 260) doc.addPage();
+      doc.setDrawColor(5, 150, 105);
+      doc.rect(15, 255, 180, 25);
+      doc.setTextColor(4, 120, 87);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('GIRMAIC HUMANITY SECURE BACKEND VERIFIED BACKUP', 20, 262);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Offline encrypted copy generated for personal rights preservation and case tracking.', 20, 268);
+      doc.text('Founder & Visionary: Girma Haile Bunaro | girmahb1979@gmail.com', 20, 274);
+
+      doc.save(`Girmaic_Humanity_Reports_Backup_${userId}_${Date.now()}.pdf`);
+    } catch (err) {
+      console.error('PDF export error:', err);
+      alert('Failed to generate PDF backup. Please check your browser capabilities.');
+    }
+  };
+
   const handleDeleteAccount = () => {
     if (window.confirm("Account Erasure Request: Are you absolutely sure you want to permanently delete your Girmaic Humanity profile and scrub all locally drafted reports? This cannot be undone.")) {
       // Clear data and simulate scrubbing
@@ -266,6 +378,39 @@ export default function ProfileManager({ userId, onUpdateProfile, onLogout }: Pr
                   </p>
                 )}
               </div>
+
+              {/* App Security Toggle for Sensitive Sections (Report & Admin) */}
+              <div className="pt-3.5 border-t border-slate-100 dark:border-slate-850 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Lock className="h-4.5 w-4.5 text-emerald-650 dark:text-emerald-400" />
+                    <div>
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-350 block leading-tight">App Security Lock</span>
+                      <span className="text-[9px] text-slate-400 block font-semibold uppercase tracking-wide">Require PIN / Biometric for Report & Admin</span>
+                    </div>
+                  </div>
+                  <button
+                    id="profile-app-security-toggle"
+                    type="button"
+                    onClick={handleToggleAppSecurity}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                      appSecurityEnabled ? 'bg-emerald-600' : 'bg-slate-200 dark:bg-slate-800'
+                    }`}
+                    aria-label="Toggle app security lock for Report and Admin sections"
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                        appSecurityEnabled ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+                {appSecurityEnabled && (
+                  <p className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/35 p-2 rounded-lg border border-emerald-200">
+                    🔒 Security Active: Access to 'Report' and 'Admin' sections is protected by authentication passcode.
+                  </p>
+                )}
+              </div>
             </form>
           </div>
 
@@ -285,6 +430,15 @@ export default function ProfileManager({ userId, onUpdateProfile, onLogout }: Pr
                 className="w-full bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 font-semibold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
               >
                 <Download className="h-4 w-4" /> Export All My Data
+              </button>
+
+              <button
+                id="profile-export-pdf-btn"
+                onClick={handleExportPDFReports}
+                className="w-full bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-extrabold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                title="Download saved reports as a secure PDF document for offline backup"
+              >
+                <FileText className="h-4 w-4" /> Download Reports as Secure PDF
               </button>
 
               <button

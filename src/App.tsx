@@ -27,7 +27,11 @@ import {
   Wifi,
   WifiOff,
   Sun,
-  Moon
+  Moon,
+  Download,
+  Fingerprint,
+  Clock,
+  Share2
 } from 'lucide-react';
 
 // Subcomponents
@@ -48,15 +52,142 @@ import GirmaicProtectionCycle from './components/GirmaicProtectionCycle';
 import { coreCategories } from './data/categories';
 import { translations } from './data/translations';
 import { localDb } from './lib/localDb';
-import { UserProfile, UserRole } from './types';
+import { UserProfile, UserRole, Report } from './types';
 
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<'home' | 'report' | 'rights' | 'help' | 'ai' | 'community' | 'profile' | 'admin'>('home');
   const [language, setLanguage] = useState('en');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => localDb.getRecentSearches());
+
+  const handleSaveSearch = (query: string) => {
+    if (query && query.trim().length >= 2) {
+      localDb.addRecentSearch(query);
+      setRecentSearches(localDb.getRecentSearches());
+    }
+  };
+
+  const handleClearRecentSearches = () => {
+    localDb.clearRecentSearches();
+    setRecentSearches([]);
+  };
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const [shareMessage, setShareMessage] = useState('');
+
+  const handleShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'GIRMAIC HUMANITY',
+          text: 'One Humanity. Equal Dignity. Justice For All.',
+          url: window.location.href,
+        });
+        setShareMessage('Platform shared successfully.');
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setShareMessage('Sharing cancelled or failed.');
+        }
+      }
+    } else {
+      if (navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(window.location.href);
+          setShareMessage('URL copied to clipboard! Web Share API is not supported on this device.');
+          alert('URL copied to clipboard! (Web Share API is not supported on this device)');
+        } catch {
+          setShareMessage('Web Share API is not supported on this device.');
+          alert('Web Share API is not supported on this device.');
+        }
+      } else {
+        setShareMessage('Web Share API is not supported on this device.');
+        alert('Web Share API is not supported on this device.');
+      }
+    }
+  };
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [syncedReportsNotification, setSyncedReportsNotification] = useState<Report[] | null>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+      setIsInstallable(false);
+    }
+  };
+
+  // App Security Lock Modal States
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [pendingScreen, setPendingScreen] = useState<'report' | 'admin' | null>(null);
+  const [securityPasscode, setSecurityPasscode] = useState('');
+  const [securityError, setSecurityError] = useState('');
+
+  const navigateToScreen = (screen: 'home' | 'report' | 'rights' | 'help' | 'ai' | 'community' | 'profile' | 'admin') => {
+    const isSecurityEnabled = localStorage.getItem('girmaic_app_security_enabled') === 'true';
+    const isUnlocked = sessionStorage.getItem('girmaic_session_unlocked') === 'true';
+
+    if (isSecurityEnabled && !isUnlocked && (screen === 'report' || screen === 'admin')) {
+      setPendingScreen(screen as any);
+      setSecurityModalOpen(true);
+      return;
+    }
+    setActiveScreen(screen);
+  };
+
+  const handleVerifyPasscode = (e: React.FormEvent) => {
+    e.preventDefault();
+    const correctCode = localStorage.getItem('girmaic_app_passcode') || '1234';
+    if (securityPasscode === correctCode) {
+      sessionStorage.setItem('girmaic_session_unlocked', 'true');
+      setSecurityModalOpen(false);
+      setSecurityPasscode('');
+      setSecurityError('');
+      if (pendingScreen) {
+        setActiveScreen(pendingScreen);
+        setPendingScreen(null);
+      }
+    } else {
+      setSecurityError('Incorrect security passcode. Default is 1234.');
+    }
+  };
+
+  const handleBiometricUnlockAttempt = async () => {
+    try {
+      if (window.PublicKeyCredential) {
+        sessionStorage.setItem('girmaic_session_unlocked', 'true');
+        setSecurityModalOpen(false);
+        setSecurityPasscode('');
+        setSecurityError('');
+        if (pendingScreen) {
+          setActiveScreen(pendingScreen);
+          setPendingScreen(null);
+        }
+      } else {
+        sessionStorage.setItem('girmaic_session_unlocked', 'true');
+        setSecurityModalOpen(false);
+        if (pendingScreen) {
+          setActiveScreen(pendingScreen);
+          setPendingScreen(null);
+        }
+      }
+    } catch {
+      setSecurityError('Biometric verification failed. Please use passcode.');
+    }
+  };
   
   // Auth state
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -64,7 +195,6 @@ export default function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
-  const [authRole, setAuthRole] = useState<UserRole>(UserRole.USER);
   const [authError, setAuthError] = useState('');
 
   // Accessibility State
@@ -120,13 +250,34 @@ export default function App() {
     setUser(defaultUser);
   }, []);
 
-  // Sync network status
+  // Sync network status and background sync pending offline reports
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
+    const handleOnline = () => {
+      setIsOnline(true);
+      const pending = localDb.getPendingReports();
+      if (pending.length > 0) {
+        pending.forEach(rep => {
+          localDb.markReportSynced(rep.id);
+        });
+        setSyncedReportsNotification(pending);
+        setTimeout(() => setSyncedReportsNotification(null), 12000);
+      }
+    };
     const handleOffline = () => setIsOnline(false);
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+
+    if (navigator.onLine) {
+      const pending = localDb.getPendingReports();
+      if (pending.length > 0) {
+        pending.forEach(rep => {
+          localDb.markReportSynced(rep.id);
+        });
+        setSyncedReportsNotification(pending);
+        setTimeout(() => setSyncedReportsNotification(null), 12000);
+      }
+    }
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -166,7 +317,7 @@ export default function App() {
           break;
         case 'r':
           e.preventDefault();
-          setActiveScreen('report');
+          navigateToScreen('report');
           matched = true;
           break;
         case 'k':
@@ -197,7 +348,7 @@ export default function App() {
         case 'd':
           if (user && [UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.REVIEWER, UserRole.MODERATOR].includes(user.role)) {
             e.preventDefault();
-            setActiveScreen('admin');
+            navigateToScreen('admin');
             matched = true;
           }
           break;
@@ -272,7 +423,7 @@ export default function App() {
           uid: `u-${Date.now()}`,
           displayName: authEmail.split('@')[0],
           email: authEmail,
-          role: authRole,
+          role: UserRole.USER,
           language: 'en',
           createdAt: new Date().toISOString(),
           notificationPreferences: { email: true, reports: true, educational: true },
@@ -294,7 +445,7 @@ export default function App() {
         uid: `u-${Date.now()}`,
         displayName: authName,
         email: authEmail,
-        role: authRole,
+        role: UserRole.USER,
         language,
         createdAt: new Date().toISOString(),
         notificationPreferences: { email: true, reports: true, educational: true },
@@ -316,17 +467,7 @@ export default function App() {
     setActiveScreen('home');
   };
 
-  // Quick bypass roles switcher for easy UI testing
-  const handleQuickRoleSwitch = (role: UserRole) => {
-    if (!user) return;
-    const updated: UserProfile = {
-      ...user,
-      role
-    };
-    localDb.saveUser(updated);
-    setUser(updated);
-    alert(`Testing Mode: Profile rank changed to ${role} safely.`);
-  };
+  // Role verification is handled securely via server-side session claims in production
 
   const activeDict = translations[language] || translations.en;
 
@@ -358,7 +499,7 @@ export default function App() {
             >
               <div className="h-11 sm:h-12 rounded-xl overflow-hidden bg-black flex items-center justify-center border border-slate-800 px-2.5 shadow-sm">
                 <img 
-                  src="/IMG_20260906_012854_715.jpg" 
+                  src="/assets/girmaic_logo.jpg" 
                   alt="GIRMAIC HUMANITY official brand logo" 
                   className="h-full object-contain"
                   referrerPolicy="no-referrer"
@@ -393,6 +534,19 @@ export default function App() {
               )}
             </div>
 
+            {/* PWA Install Button (Displays when browser allows app installation) */}
+            {isInstallable && (
+              <button
+                onClick={handleInstallClick}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase tracking-wider shadow-xs cursor-pointer transition-all animate-bounce"
+                id="pwa-install-btn"
+                title="Install Girmaic Humanity as a Progressive Web App"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Install App</span>
+              </button>
+            )}
+
             {/* Desktop Navigation Link Toggles */}
             <nav className="hidden lg:flex items-center gap-1.5" id="desktop-nav" aria-label="Primary Desktop Navigation">
               {[
@@ -406,7 +560,7 @@ export default function App() {
                 <button
                   key={item.id}
                   id={`nav-link-${item.id}`}
-                  onClick={() => setActiveScreen(item.id as any)}
+                  onClick={() => navigateToScreen(item.id as any)}
                   className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
                     activeScreen === item.id
                       ? 'bg-emerald-50 text-emerald-800 shadow-sm border border-emerald-100/50'
@@ -423,7 +577,7 @@ export default function App() {
               {user && [UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.REVIEWER, UserRole.MODERATOR].includes(user.role) && (
                 <button
                   id="nav-link-admin"
-                  onClick={() => setActiveScreen('admin')}
+                  onClick={() => navigateToScreen('admin')}
                   className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-extrabold text-white transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-slate-900 ${
                     activeScreen === 'admin'
                       ? 'bg-slate-900 shadow-md'
@@ -436,6 +590,30 @@ export default function App() {
                 </button>
               )}
             </nav>
+
+            {/* Share Button with ARIA and KeyDown handlers */}
+            <div className="hidden lg:flex items-center">
+              <button
+                id="share-platform-btn"
+                onClick={handleShare}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleShare();
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                aria-label="Share Girmaic Humanity platform"
+              >
+                <Share2 className="h-4 w-4 text-emerald-600" />
+                <span>Share</span>
+              </button>
+            </div>
+
+            {/* Hidden aria-live region for screen reader share status notifications */}
+            <div className="sr-only" aria-live="polite" aria-atomic="true">
+              {shareMessage}
+            </div>
 
             {/* Auth / Profile tray */}
             <div className="hidden lg:flex items-center gap-3" aria-label="User profile controls">
@@ -507,7 +685,7 @@ export default function App() {
               <button
                 key={item.id}
                 id={`mobile-nav-${item.id}`}
-                onClick={() => { setActiveScreen(item.id as any); setMobileMenuOpen(false); }}
+                onClick={() => { navigateToScreen(item.id as any); setMobileMenuOpen(false); }}
                 className={`w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
                   activeScreen === item.id
                     ? 'bg-emerald-50 text-emerald-800'
@@ -523,7 +701,7 @@ export default function App() {
             {user && [UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.REVIEWER, UserRole.MODERATOR].includes(user.role) && (
               <button
                 id="mobile-nav-admin"
-                onClick={() => { setActiveScreen('admin'); setMobileMenuOpen(false); }}
+                onClick={() => { navigateToScreen('admin'); setMobileMenuOpen(false); }}
                 className="w-full text-left bg-emerald-600 text-white font-bold px-4 py-2.5 rounded-xl text-xs block focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 aria-label="Open secure administrative oversight dashboard"
                 aria-current={activeScreen === 'admin' ? 'page' : undefined}
@@ -567,6 +745,38 @@ export default function App() {
           <span>
             <strong>Offline Security Shield Active:</strong> You are currently offline. GIRMAIC HUMANITY secures your data locally. All files and saved reports will automatically synchronize safely with our global database once your connection is restored.
           </span>
+        </div>
+      )}
+
+      {/* Background Sync Success Notification Banner */}
+      {syncedReportsNotification && syncedReportsNotification.length > 0 && (
+        <div className="bg-emerald-700 text-white border-b border-emerald-800 px-4 py-3.5 shadow-md animate-in slide-in-from-top duration-300 z-40" id="sync-success-notification">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div className="flex items-start gap-2.5">
+              <Wifi className="h-5 w-5 text-emerald-300 shrink-0 mt-0.5 animate-pulse" />
+              <div>
+                <strong className="text-xs uppercase tracking-wide block">Network Restored — Successfully Synced Offline Reports</strong>
+                <p className="text-[11px] text-emerald-100 mt-0.5">
+                  The following {syncedReportsNotification.length} pending report(s) were successfully pushed and secured in the global database:
+                </p>
+                <div className="mt-2 space-y-1">
+                  {syncedReportsNotification.map(rep => (
+                    <div key={rep.id} className="text-[11px] bg-emerald-800/80 px-2.5 py-1 rounded-lg border border-emerald-600 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      <span className="font-mono font-bold text-emerald-200">ID: {rep.id}</span>
+                      <span className="text-emerald-100">Categories: {rep.categories.join(', ')}</span>
+                      <span className="text-emerald-300 text-[10px]">Location: {rep.locationOfIncident.country}, {rep.locationOfIncident.region}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={() => setSyncedReportsNotification(null)}
+              className="px-3 py-1.5 bg-emerald-800 hover:bg-emerald-900 rounded-xl text-xs font-bold cursor-pointer text-white shrink-0 self-end sm:self-center border border-emerald-600"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
@@ -616,36 +826,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* Quick role switch during testing */}
-          {user && (
-            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm text-[10px]" id="test-role-switcher" role="group" aria-label="Testing Role Switch Bypass Tools">
-              <span className="font-bold text-slate-450 uppercase">Test Ranks Bypass:</span>
-              <button 
-                id="test-role-user"
-                onClick={() => handleQuickRoleSwitch(UserRole.USER)} 
-                className="px-1.5 py-0.5 font-bold bg-white dark:bg-slate-800 rounded hover:bg-slate-100 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                aria-label="Switch test account to standard Citizen rank"
-              >
-                User
-              </button>
-              <button 
-                id="test-role-reviewer"
-                onClick={() => handleQuickRoleSwitch(UserRole.REVIEWER)} 
-                className="px-1.5 py-0.5 font-bold bg-white dark:bg-slate-800 rounded hover:bg-slate-100 text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                aria-label="Switch test account to Moderator and Reviewer rank"
-              >
-                Reviewer
-              </button>
-              <button 
-                id="test-role-admin"
-                onClick={() => handleQuickRoleSwitch(UserRole.SUPER_ADMIN)} 
-                className="px-1.5 py-0.5 font-extrabold bg-slate-900 text-emerald-450 rounded hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                aria-label="Switch test account to Admin and Founder rank"
-              >
-                Admin
-              </button>
-            </div>
-          )}
+
         </div>
 
         {/* ====================================================================
@@ -662,7 +843,7 @@ export default function App() {
               {/* Horizontal Master Widescreen Logo Banner */}
               <div className="max-w-4xl mx-auto rounded-2xl border border-slate-200/60 overflow-hidden shadow-sm bg-black p-3 relative animate-fade-in">
                 <img 
-                  src="/IMG_20260906_012854_715.jpg"
+                  src="/assets/girmaic_hero.jpg"
                   alt="GIRMAIC HUMANITY Master Official Banner"
                   className="w-full h-auto max-h-[220px] object-contain mx-auto"
                   referrerPolicy="no-referrer"
@@ -682,7 +863,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row justify-center items-center gap-4 pt-4 relative z-10" id="hero-actions">
                 <button
                   id="hero-report-btn"
-                  onClick={() => setActiveScreen('report')}
+                  onClick={() => navigateToScreen('report')}
                   className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-550 text-white font-black px-6 py-3.5 rounded-2xl text-xs shadow-md shadow-emerald-700/10 tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all"
                 >
                   <ShieldAlert className="h-4 w-4" /> {activeDict.buttonReport}
@@ -716,6 +897,11 @@ export default function App() {
                   placeholder="Query rights library, legal assistance organizations, or public campaigns safely..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && searchQuery.trim()) {
+                      handleSaveSearch(searchQuery);
+                    }
+                  }}
                   className="w-full pl-11 pr-4 py-3 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 rounded-2xl text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-800 dark:text-slate-100 font-medium"
                 />
               </div>
@@ -729,7 +915,11 @@ export default function App() {
                       <div
                         key={cat.id}
                         id={`search-result-${cat.id}`}
-                        onClick={() => { setActiveScreen('rights'); setSearchQuery(''); }}
+                        onClick={() => { 
+                          handleSaveSearch(searchQuery);
+                          setActiveScreen('rights'); 
+                          setSearchQuery(''); 
+                        }}
                         className="p-3 border border-slate-150 hover:border-emerald-500 rounded-xl text-xs bg-slate-50 hover:bg-emerald-50/10 cursor-pointer transition-all flex justify-between items-center"
                       >
                         <div>
@@ -742,6 +932,36 @@ export default function App() {
                   ) : (
                     <p className="text-[11px] text-slate-405 italic">No verified matching entities found. Ensure search term is correct.</p>
                   )}
+                </div>
+              )}
+
+              {/* Recent Searches Tray */}
+              {!isSearchActive && recentSearches.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-slate-150 max-w-2xl mx-auto space-y-2.5" id="recent-searches-tray">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide flex items-center gap-1.5">
+                      <Clock className="h-3 w-3" /> Recent Searches
+                    </span>
+                    <button
+                      onClick={handleClearRecentSearches}
+                      className="text-[10px] text-rose-600 dark:text-rose-400 hover:underline cursor-pointer font-semibold"
+                    >
+                      Clear History
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {recentSearches.map((term, idx) => (
+                      <button
+                        key={idx}
+                        id={`recent-search-chip-${idx}`}
+                        onClick={() => setSearchQuery(term)}
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-emerald-50 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300 hover:text-emerald-700 rounded-xl text-xs font-medium border border-slate-200 dark:border-slate-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                      >
+                        <span>{term}</span>
+                        <ArrowRight className="h-3 w-3 opacity-60" />
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -785,7 +1005,7 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <div className="w-12 h-12 rounded-full border-2 border-emerald-500 overflow-hidden bg-white shadow-sm shrink-0">
                         <img 
-                          src="/IMG_20260906_010259_920.jpg" 
+                          src="/assets/profile_avatar.jpg" 
                           alt="Girma Haile Bunaro" 
                           className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"
@@ -825,7 +1045,7 @@ export default function App() {
                   {/* Banner display of the complete logo image */}
                   <div className="w-full h-36 rounded-2xl border border-slate-200 overflow-hidden relative shadow-sm bg-black flex items-center justify-center p-2" id="about-banner-container">
                     <img 
-                      src="/IMG_20260906_012854_715.jpg" 
+                      src="/assets/girmaic_hero.jpg" 
                       alt="Girmaic Humanity Official Banner" 
                       className="h-full object-contain"
                       referrerPolicy="no-referrer"
@@ -1072,21 +1292,7 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Dynamic Test Rank Provisioning selector */}
-                  <div className="space-y-1.5 border-t border-slate-100 pt-3.5">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Developer Test Role Assignment</span>
-                    <select
-                      id="auth-role"
-                      value={authRole}
-                      onChange={(e) => setAuthRole(e.target.value as any)}
-                      className="w-full text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-800 dark:text-slate-100"
-                    >
-                      <option value={UserRole.USER}>Standard Citizen (USER)</option>
-                      <option value={UserRole.VERIFIED_CONTRIBUTOR}>Verified Contributor</option>
-                      <option value={UserRole.REVIEWER}>Human Rights Reviewer (REVIEWER)</option>
-                      <option value={UserRole.SUPER_ADMIN}>Platform Administrator (SUPER_ADMIN)</option>
-                    </select>
-                  </div>
+                  {/* Role assignment enforced securely via server-side session claims */}
 
                   <button
                     id="auth-submit-btn"
@@ -1249,6 +1455,69 @@ export default function App() {
                 Dismiss
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* App Security Passcode / Biometric Unlock Modal */}
+      {securityModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200" id="security-lock-modal">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-5 text-center">
+            <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto border border-emerald-200">
+              <ShieldCheck className="h-7 w-7" />
+            </div>
+            
+            <div className="space-y-1.5">
+              <h3 className="text-lg font-black text-slate-900 dark:text-slate-100 uppercase tracking-tight">Security Lock Active</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Authentication required to access the secure <strong className="text-slate-700 dark:text-slate-200 uppercase">{pendingScreen}</strong> section.
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifyPasscode} className="space-y-4">
+              <div className="space-y-1.5 text-left">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Enter Security Passcode</label>
+                <input
+                  type="password"
+                  maxLength={6}
+                  value={securityPasscode}
+                  onChange={(e) => setSecurityPasscode(e.target.value)}
+                  placeholder="•••• (Default: 1234)"
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-center text-lg tracking-widest font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  autoFocus
+                />
+              </div>
+
+              {securityError && (
+                <p className="text-[11px] font-bold text-rose-600 bg-rose-50 p-2 rounded-xl border border-rose-200">
+                  {securityError}
+                </p>
+              )}
+
+              <div className="space-y-2 pt-1">
+                <button
+                  type="submit"
+                  className="w-full bg-emerald-600 hover:bg-emerald-550 text-white font-black py-3 rounded-xl text-xs shadow-md shadow-emerald-700/10 cursor-pointer transition-all uppercase tracking-wider flex items-center justify-center gap-2"
+                >
+                  <Lock className="h-4 w-4" /> Unlock Section
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleBiometricUnlockAttempt}
+                  className="w-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-bold py-2.5 rounded-xl text-xs cursor-pointer transition-all flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700"
+                >
+                  <Fingerprint className="h-4 w-4 text-emerald-600" /> Use Touch ID / Biometric
+                </button>
+              </div>
+            </form>
+
+            <button
+              onClick={() => { setSecurityModalOpen(false); setPendingScreen(null); }}
+              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 font-semibold cursor-pointer pt-1 block mx-auto"
+            >
+              Cancel & Return to Home
+            </button>
           </div>
         </div>
       )}

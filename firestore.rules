@@ -28,12 +28,17 @@ service cloud.firestore {
       return role == 'ADMIN' || role == 'SUPER_ADMIN' || role == 'MODERATOR' || role == 'REVIEWER' || role == 'HUMAN_RIGHTS_ANALYST' || role == 'ORGANIZATION_REVIEWER';
     }
 
-    // Users Collection
+    // Users Collection & User-Owned Subcollections
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isOwner(userId) || (isAuthenticated() && getUserData().role == 'ADMIN');
-      allow delete: if isAuthenticated() && getUserData().role == 'ADMIN';
+      allow create: if isAuthenticated() && request.auth.uid == userId && (request.resource.data.role == 'USER' || !('role' in request.resource.data));
+      allow update: if (isOwner(userId) && request.resource.data.role == resource.data.role) || (isAuthenticated() && getUserData().role == 'ADMIN' || isAuthenticated() && getUserData().role == 'SUPER_ADMIN');
+      allow delete: if isAuthenticated() && (getUserData().role == 'ADMIN' || getUserData().role == 'SUPER_ADMIN');
+
+      // Enforce strict owner-only access for all user subcollections
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
 
     // Reports Collection

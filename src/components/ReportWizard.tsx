@@ -369,14 +369,18 @@ export default function ReportWizard({ userId, onSuccess }: ReportWizardProps) {
             status: ReportStatus.SUBMITTED,
             changedBy: 'System Engine',
             timestamp: new Date().toISOString(),
-            notes: 'Secure human rights report received.'
+            notes: `Secure human rights report received and timestamped at local time: ${new Date().toLocaleString()}.`
           }
         ],
         reviews: []
       };
 
-      // Store securely in our localized state engine
-      localDb.saveReport(finalReport);
+      // Store securely in our localized state engine or queue for background sync if offline
+      if (!navigator.onLine) {
+        localDb.queueOfflineReport(finalReport);
+      } else {
+        localDb.saveReport(finalReport);
+      }
       
       // Complete flow
       onSuccess(generatedId);
@@ -764,6 +768,10 @@ export default function ReportWizard({ userId, onSuccess }: ReportWizardProps) {
               <div className="flex justify-between">
                 <span className="text-slate-450">Privacy Access:</span>
                 <span className="font-bold text-emerald-600 uppercase">{PrivacyLevel[privacyLevel]}</span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200 dark:border-slate-750 pt-2 mt-2">
+                <span className="text-slate-450 font-bold">Local Submission Time:</span>
+                <span className="font-bold text-slate-800 dark:text-slate-200">{new Date().toLocaleString()}</span>
               </div>
             </div>
 

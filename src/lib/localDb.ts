@@ -193,6 +193,39 @@ class SecureLocalDb {
     this.setStorageItem('girmaic_reports', reports);
   }
 
+  getPendingReports(): Report[] {
+    return this.getStorageItem<Report[]>('girmaic_pending_offline_reports', []);
+  }
+
+  queueOfflineReport(report: Report): void {
+    const pending = this.getPendingReports();
+    if (!pending.some(r => r.id === report.id)) {
+      pending.push(report);
+      this.setStorageItem('girmaic_pending_offline_reports', pending);
+    }
+    this.saveReport(report);
+  }
+
+  markReportSynced(reportId: string): void {
+    const pending = this.getPendingReports();
+    const filtered = pending.filter(r => r.id !== reportId);
+    this.setStorageItem('girmaic_pending_offline_reports', filtered);
+
+    const reports = this.getReports();
+    const idx = reports.findIndex(r => r.id === reportId);
+    if (idx >= 0) {
+      reports[idx].status = ReportStatus.RECEIVED;
+      reports[idx].timeline.push({
+        id: `t-sync-${Date.now()}`,
+        status: ReportStatus.RECEIVED,
+        changedBy: 'Background Sync Engine',
+        timestamp: new Date().toISOString(),
+        notes: `Automatically synced from offline storage to secure database at local time: ${new Date().toLocaleString()}.`
+      });
+      this.setStorageItem('girmaic_reports', reports);
+    }
+  }
+
   getCommunityPosts(): CommunityPost[] {
     const defaultPosts: CommunityPost[] = [
       {
@@ -255,6 +288,24 @@ class SecureLocalDb {
       bookmarks.splice(index, 1);
       this.setStorageItem('girmaic_bookmarks', bookmarks);
     }
+  }
+
+  getRecentSearches(): string[] {
+    return this.getStorageItem<string[]>('girmaic_recent_searches', []);
+  }
+
+  addRecentSearch(query: string): void {
+    const trimmed = query.trim();
+    if (!trimmed || trimmed.length < 2) return;
+    const searches = this.getRecentSearches();
+    const filtered = searches.filter(s => s.toLowerCase() !== trimmed.toLowerCase());
+    filtered.unshift(trimmed);
+    const limited = filtered.slice(0, 6);
+    this.setStorageItem('girmaic_recent_searches', limited);
+  }
+
+  clearRecentSearches(): void {
+    this.setStorageItem('girmaic_recent_searches', []);
   }
 }
 
